@@ -1,10 +1,11 @@
 ---
-- name: Deploy static website with directory listing
+- name: Deploy static website with directory listing (override index)
   hosts: webservers
   become: yes
 
   vars:
     app_src_dir: "{{ lookup('env', 'WORKSPACE') }}/app"
+    web_root: /var/www/html
 
   tasks:
     - name: Update apt cache
@@ -23,25 +24,43 @@
         state: started
         enabled: yes
 
-    - name: Remove Apache default index page
-      ansible.builtin.file:
-        path: /var/www/html/index.html
-        state: absent
+    # Keep your index.html/home.html/about.html — do NOT remove them
 
-    - name: Deploy website files from Git repo
+    - name: Deploy website files from Jenkins workspace
       ansible.builtin.copy:
         src: "{{ app_src_dir }}/"
-        dest: /var/www/html/
+        dest: "{{ web_root }}/"
         owner: www-data
         group: www-data
-        mode: '0755'
+        mode: "0644"
+      # ensure directories under web_root are executable by everyone
+    - name: Fix directory permissions under web root
+      ansible.builtin.file:
+        path: "{{ web_root }}"
+        state: directory
+        recurse: yes
+        owner: www-data
+        group: www-data
+        mode: "0755"
 
-    - name: Enable Apache directory listing
+    # Make sure the modules we rely on are on (idempotent on Ubuntu/Debian)
+    - name: Enable Apache modules needed for directory listings
+      ansible.builtin.command: "a2enmod {{ item }}"
+      args:
+        creates: "/etc/apache2/mods-enabled/{{ item }}.load"
+      loop:
+        - dir          # serves DirectoryIndex (we'll disable it below)
+        - autoindex    # generates the listings when +Indexes is set
+      notify: Restart Apache
+
+    # Configure this directory to always show listing (even if index.html exists)
+    - name: Write directory listing configuration for the web root
       ansible.builtin.copy:
         dest: /etc/apache2/conf-available/dirlisting.conf
         content: |
-          <Directory /var/www/html>
+          <Directory {{ web_root }}>
               Options +Indexes
+              DirectoryIndex disabled
               AllowOverride None
               Require all granted
           </Directory>
@@ -53,8 +72,20 @@
         creates: /etc/apache2/conf-enabled/dirlisting.conf
       notify: Reload Apache
 
+    - name: Validate Apache configuration
+      ansible.builtin.command: apache2ctl configtest
+      register: apache_configtest
+      changed_when: false
+      failed_when: apache_configtest.rc != 0
+
   handlers:
     - name: Reload Apache
       ansible.builtin.service:
         name: apache2
         state: reloaded
+
+    - name: Restart Apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
+``
