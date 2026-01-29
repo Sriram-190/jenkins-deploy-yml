@@ -4,32 +4,28 @@
   become: yes
 
   vars:
-    app_src_dir: "{{ lookup('env', 'WORKSPACE') | default(playbook_dir, true) }}"
+    app_src_dir: "{{ lookup('env', 'WORKSPACE') }}/app"
 
   tasks:
-    - name: Update apt cache
-      ansible.builtin.apt:
-        update_cache: yes
-        cache_valid_time: 3600
-
     - name: Install Apache
-      ansible.builtin.apt:
+      apt:
         name: apache2
         state: present
+        update_cache: yes
 
-    - name: Ensure Apache is enabled and running
-      ansible.builtin.service:
+    - name: Ensure Apache is running
+      service:
         name: apache2
         state: started
         enabled: yes
 
-    - name: Remove default Apache index.html
-      ansible.builtin.file:
+    - name: Remove Apache default page
+      file:
         path: /var/www/html/index.html
         state: absent
 
-    - name: Copy website files from Jenkins workspace
-      ansible.builtin.copy:
+    - name: Deploy site from Git repo
+      copy:
         src: "{{ app_src_dir }}/"
         dest: /var/www/html/
         owner: www-data
@@ -39,6 +35,6 @@
 
   handlers:
     - name: Reload Apache
-      ansible.builtin.service:
+      service:
         name: apache2
         state: reloaded
