@@ -1,5 +1,5 @@
 ---
-- name: Deploy static website to web servers
+- name: Deploy static website with directory listing
   hosts: webservers
   become: yes
 
@@ -7,34 +7,54 @@
     app_src_dir: "{{ lookup('env', 'WORKSPACE') }}/app"
 
   tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
     - name: Install Apache
-      apt:
+      ansible.builtin.apt:
         name: apache2
         state: present
-        update_cache: yes
 
-    - name: Ensure Apache is running
-      service:
+    - name: Ensure Apache is running and enabled
+      ansible.builtin.service:
         name: apache2
         state: started
         enabled: yes
 
-    - name: Remove Apache default page
-      file:
+    - name: Remove Apache default index page
+      ansible.builtin.file:
         path: /var/www/html/index.html
         state: absent
 
-    - name: Deploy site from Git repo
-      copy:
+    - name: Deploy website files from Git repo
+      ansible.builtin.copy:
         src: "{{ app_src_dir }}/"
         dest: /var/www/html/
         owner: www-data
         group: www-data
         mode: '0755'
+
+    - name: Enable Apache directory listing
+      ansible.builtin.copy:
+        dest: /etc/apache2/conf-available/dirlisting.conf
+        content: |
+          <Directory /var/www/html>
+              Options +Indexes
+              AllowOverride None
+              Require all granted
+          </Directory>
+      notify: Reload Apache
+
+    - name: Enable directory listing configuration
+      ansible.builtin.command: a2enconf dirlisting
+      args:
+        creates: /etc/apache2/conf-enabled/dirlisting.conf
       notify: Reload Apache
 
   handlers:
     - name: Reload Apache
-      service:
+      ansible.builtin.service:
         name: apache2
         state: reloaded
