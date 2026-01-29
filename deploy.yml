@@ -24,8 +24,7 @@
         state: started
         enabled: yes
 
-    # Keep your index.html/home.html/about.html — do NOT remove them
-
+    # Keep your index.html/home.html/about.html — DO NOT remove them
     - name: Deploy website files from Jenkins workspace
       ansible.builtin.copy:
         src: "{{ app_src_dir }}/"
@@ -33,7 +32,8 @@
         owner: www-data
         group: www-data
         mode: "0644"
-      # ensure directories under web_root are executable by everyone
+
+    # Ensure directories are executable and owned by www-data
     - name: Fix directory permissions under web root
       ansible.builtin.file:
         path: "{{ web_root }}"
@@ -43,14 +43,14 @@
         group: www-data
         mode: "0755"
 
-    # Make sure the modules we rely on are on (idempotent on Ubuntu/Debian)
+    # Make sure modules are enabled (idempotent on Debian/Ubuntu)
     - name: Enable Apache modules needed for directory listings
       ansible.builtin.command: "a2enmod {{ item }}"
       args:
         creates: "/etc/apache2/mods-enabled/{{ item }}.load"
       loop:
-        - dir          # serves DirectoryIndex (we'll disable it below)
-        - autoindex    # generates the listings when +Indexes is set
+        - dir        # controls DirectoryIndex
+        - autoindex  # generates listings when +Indexes is set
       notify: Restart Apache
 
     # Configure this directory to always show listing (even if index.html exists)
@@ -88,4 +88,3 @@
       ansible.builtin.service:
         name: apache2
         state: restarted
-``
