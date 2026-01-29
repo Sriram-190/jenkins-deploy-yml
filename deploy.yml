@@ -4,9 +4,7 @@
   become: yes
 
   vars:
-    # Jenkins passes this: -e APP_SRC_DIR=${WORKSPACE}
-    # Fallback for local testing: current directory
-    APP_SRC_DIR: "{{ APP_SRC_DIR | default(playbook_dir) }}"
+    app_src_dir: "{{ lookup('env', 'WORKSPACE') | default(playbook_dir, true) }}"
 
   tasks:
     - name: Update apt cache
@@ -25,52 +23,19 @@
         state: started
         enabled: yes
 
-    - name: Ensure web root exists
+    - name: Remove default Apache index.html
       ansible.builtin.file:
-        path: /var/www/html
-        state: directory
+        path: /var/www/html/index.html
+        state: absent
+
+    - name: Copy website files from Jenkins workspace
+      ansible.builtin.copy:
+        src: "{{ app_src_dir }}/"
+        dest: /var/www/html/
         owner: www-data
         group: www-data
         mode: '0755'
-
-    - name: Copy HTML/CSS/JS files from app repo workspace
-      ansible.builtin.copy:
-        src: "{{ item }}"
-        dest: /var/www/html/
-        owner: www-data
-        group: www-data
-        mode: '0644'
-      with_fileglob:
-        - "{{ APP_SRC_DIR }}/*.html"
-        - "{{ APP_SRC_DIR }}/*.css"
-        - "{{ APP_SRC_DIR }}/*.js"
       notify: Reload Apache
-
-    - name: Copy image files from app repo workspace
-      ansible.builtin.copy:
-        src: "{{ item }}"
-        dest: /var/www/html/
-        owner: www-data
-        group: www-data
-        mode: '0644'
-      with_fileglob:
-        - "{{ APP_SRC_DIR }}/*.jpg"
-        - "{{ APP_SRC_DIR }}/*.jpeg"
-        - "{{ APP_SRC_DIR }}/*.png"
-        - "{{ APP_SRC_DIR }}/*.gif"
-        - "{{ APP_SRC_DIR }}/*.svg"
-        - "{{ APP_SRC_DIR }}/*.webp"
-      notify: Reload Apache
-
-    # Optional: Verify remote index.html content (helps confirm deploy)
-    - name: Show remote index.html checksum
-      ansible.builtin.shell: "sha256sum /var/www/html/index.html | awk '{print $1}'"
-      register: remote_index_checksum
-      changed_when: false
-
-    - name: Print remote checksum
-      ansible.builtin.debug:
-        msg: "REMOTE index.html checksum: {{ remote_index_checksum.stdout }}"
 
   handlers:
     - name: Reload Apache
