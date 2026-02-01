@@ -1,90 +1,81 @@
 ---
 - name: Deploy static website with directory listing (override index)
   hosts: webservers
-  become: yes
+  become: true
 
   vars:
-    app_src_dir: "{{ lookup('env', 'WORKSPACE') }}/app"
     web_root: /var/www/html
 
   tasks:
     - name: Update apt cache
-      ansible.builtin.apt:
+      apt:
         update_cache: yes
         cache_valid_time: 3600
 
     - name: Install Apache
-      ansible.builtin.apt:
+      apt:
         name: apache2
         state: present
 
     - name: Ensure Apache is running and enabled
-      ansible.builtin.service:
+      service:
         name: apache2
         state: started
         enabled: yes
 
-    # Keep your index.html/home.html/about.html — DO NOT remove them
-    - name: Deploy website files from Jenkins workspace
-      ansible.builtin.copy:
-        src: "{{ app_src_dir }}/"
+    # Make Apache show directory listing (Indexes)
+    # And override index.html by disabling DirectoryIndex
+    - name: Configure Apache directory listing for web root
+      copy:
+        dest: /etc/apache2/conf-available/dir-listing.conf
+        content: |
+          <Directory {{ web_root }}>
+              Options +Indexes
+              AllowOverride None
+              Require all granted
+              DirectoryIndex disabled
+          </Directory>
+      notify: Reload Apache
+
+    - name: Enable directory listing config
+      command: a2enconf dir-listing
+      args:
+        creates: /etc/apache2/conf-enabled/dir-listing.conf
+      notify: Reload Apache
+
+    # Validate Jenkins passed app_src correctly
+    - name: Fail if app_src is not provided or path does not exist on controller
+      delegate_to: localhost
+      become: false
+      stat:
+        path: "{{ app_src }}"
+      register: app_src_stat
+
+    - name: Stop if app_src is invalid
+      delegate_to: localhost
+      become: false
+      fail:
+        msg: "app_src '{{ app_src }}' not found on controller. Jenkins must pass -e app_src=${WORKSPACE}/app"
+      when: not app_src_stat.stat.exists
+
+    - name: Ensure web root exists
+      file:
+        path: "{{ web_root }}"
+        state: directory
+        owner: www-data
+        group: www-data
+        mode: "0755"
+
+    - name: Deploy website files from CI workspace to web servers
+      copy:
+        src: "{{ app_src }}/"
         dest: "{{ web_root }}/"
         owner: www-data
         group: www-data
         mode: "0644"
 
-    # Ensure directories are executable and owned by www-data
-    - name: Fix directory permissions under web root
-      ansible.builtin.file:
-        path: "{{ web_root }}"
-        state: directory
-        recurse: yes
-        owner: www-data
-        group: www-data
-        mode: "0755"
-
-    # Make sure modules are enabled (idempotent on Debian/Ubuntu)
-    - name: Enable Apache modules needed for directory listings
-      ansible.builtin.command: "a2enmod {{ item }}"
-      args:
-        creates: "/etc/apache2/mods-enabled/{{ item }}.load"
-      loop:
-        - dir        # controls DirectoryIndex
-        - autoindex  # generates listings when +Indexes is set
-      notify: Restart Apache
-
-    # Configure this directory to always show listing (even if index.html exists)
-    - name: Write directory listing configuration for the web root
-      ansible.builtin.copy:
-        dest: /etc/apache2/conf-available/dirlisting.conf
-        content: |
-          <Directory {{ web_root }}>
-              Options +Indexes
-              DirectoryIndex disabled
-              AllowOverride None
-              Require all granted
-          </Directory>
-      notify: Reload Apache
-
-    - name: Enable directory listing configuration
-      ansible.builtin.command: a2enconf dirlisting
-      args:
-        creates: /etc/apache2/conf-enabled/dirlisting.conf
-      notify: Reload Apache
-
-    - name: Validate Apache configuration
-      ansible.builtin.command: apache2ctl configtest
-      register: apache_configtest
-      changed_when: false
-      failed_when: apache_configtest.rc != 0
-
   handlers:
     - name: Reload Apache
-      ansible.builtin.service:
+      service:
         name: apache2
         state: reloaded
-
-    - name: Restart Apache
-      ansible.builtin.service:
-        name: apache2
-        state: restarted
