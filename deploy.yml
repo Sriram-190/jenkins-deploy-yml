@@ -6,6 +6,15 @@
   vars:
     web_root: /var/www/html
 
+    # Fallback for people who run playbook outside Jenkins
+    workspace_env: "{{ lookup('env', 'WORKSPACE') | default('', true) }}"
+    app_src_fallback: >-
+      {{ (workspace_env | length > 0)
+         | ternary(workspace_env ~ '/app', playbook_dir ~ '/../app') }}
+
+    # Use passed app_src if provided, otherwise fallback
+    app_src_final: "{{ app_src | default(app_src_fallback, true) }}"
+
   tasks:
     - name: Update apt cache
       apt:
@@ -23,8 +32,6 @@
         state: started
         enabled: yes
 
-    # Make Apache show directory listing (Indexes)
-    # And override index.html by disabling DirectoryIndex
     - name: Configure Apache directory listing for web root
       copy:
         dest: /etc/apache2/conf-available/dir-listing.conf
@@ -43,19 +50,21 @@
         creates: /etc/apache2/conf-enabled/dir-listing.conf
       notify: Reload Apache
 
-    # Validate Jenkins passed app_src correctly
-    - name: Fail if app_src is not provided or path does not exist on controller
+    # Validate source path on controller ONCE (not per host)
+    - name: Validate app_src exists on controller
       delegate_to: localhost
       become: false
+      run_once: true
       stat:
-        path: "{{ app_src }}"
+        path: "{{ app_src_final }}"
       register: app_src_stat
 
-    - name: Stop if app_src is invalid
+    - name: Stop if app_src path is invalid
       delegate_to: localhost
       become: false
+      run_once: true
       fail:
-        msg: "app_src '{{ app_src }}' not found on controller. Jenkins must pass -e app_src=${WORKSPACE}/app"
+        msg: "Source folder not found on controller: {{ app_src_final }}. Ensure Jenkins clones app into WORKSPACE/app or pass -e app_src=..."
       when: not app_src_stat.stat.exists
 
     - name: Ensure web root exists
@@ -66,9 +75,9 @@
         group: www-data
         mode: "0755"
 
-    - name: Deploy website files from CI workspace to web servers
+    - name: Deploy website files to web servers
       copy:
-        src: "{{ app_src }}/"
+        src: "{{ app_src_final }}/"
         dest: "{{ web_root }}/"
         owner: www-data
         group: www-data
@@ -79,3 +88,4 @@
       service:
         name: apache2
         state: reloaded
+``
